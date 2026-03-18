@@ -52,6 +52,18 @@ func newPathsCmd() *cobra.Command {
 	}
 }
 
+func newIsInstalledCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "is-installed",
+		Short: "Check if Chrome and chromedriver are installed (exit 0 = yes, exit 1 = no)",
+		Run: func(cmd *cobra.Command, args []string) {
+			if !browser.IsInstalled() {
+				os.Exit(1)
+			}
+		},
+	}
+}
+
 func newInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",

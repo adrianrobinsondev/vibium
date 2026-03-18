@@ -261,13 +261,21 @@ func extractZip(zipPath, destDir string) error {
 	return nil
 }
 
-// IsInstalled checks if Chrome for Testing is already installed.
+// IsInstalled checks if Chrome for Testing and chromedriver are both installed.
 func IsInstalled() bool {
 	chromePath, err := paths.GetChromeExecutable()
 	if err != nil {
 		return false
 	}
-	_, err = os.Stat(chromePath)
+	if _, err = os.Stat(chromePath); err != nil {
+		return false
+	}
+
+	chromedriverPath, err := paths.GetChromedriverPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(chromedriverPath)
 	return err == nil
 }
 

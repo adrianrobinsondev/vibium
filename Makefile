@@ -166,6 +166,8 @@ test-cleanup:
 # Run CLI tests (tests the vibium binary directly)
 # Process tests run separately with --test-concurrency=1 to avoid interference
 test-cli: build-go
+	@echo "--- CLI Tests (no daemon) ---"
+	$(TIMEOUT_CMD) node --test $(TEST_FLAGS) --test-concurrency=1 tests/cli/is-installed.test.js
 	@echo "--- CLI Tests ---"
 	@$(CURDIR)/clicker/bin/vibium$(EXE) daemon stop 2>/dev/null || true
 	@$(CURDIR)/clicker/bin/vibium$(EXE) daemon start --headless
@@ -288,6 +290,7 @@ clean-js:
 clean-npm-packages:
 	rm -f packages/*/bin/vibium packages/*/bin/vibium.exe
 	rm -rf packages/vibium/dist
+	rm -f packages/*/*.tgz
 	rm -f packages/*/LICENSE packages/*/NOTICE clients/javascript/LICENSE clients/javascript/NOTICE
 
 # Clean Python packages (venv, dist, platform binaries)

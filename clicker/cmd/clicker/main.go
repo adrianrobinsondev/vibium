@@ -59,6 +59,7 @@ func main() {
 	// Register all commands
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newPathsCmd())
+	rootCmd.AddCommand(newIsInstalledCmd())
 	rootCmd.AddCommand(newInstallCmd())
 	rootCmd.AddCommand(newLaunchTestCmd())
 	rootCmd.AddCommand(newWSTestCmd())

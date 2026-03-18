@@ -7,10 +7,15 @@ import (
 )
 
 // GetCacheDir returns the platform-specific cache directory for Vibium.
+// Override with VIBIUM_CACHE_DIR environment variable.
 // Linux: ~/.cache/vibium/
 // macOS: ~/Library/Caches/vibium/
 // Windows: %LOCALAPPDATA%\vibium\
 func GetCacheDir() (string, error) {
+	if cacheDir := os.Getenv("VIBIUM_CACHE_DIR"); cacheDir != "" {
+		return cacheDir, nil
+	}
+
 	var baseDir string
 
 	switch runtime.GOOS {

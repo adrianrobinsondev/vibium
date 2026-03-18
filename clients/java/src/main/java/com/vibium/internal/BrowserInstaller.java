@@ -2,10 +2,6 @@ package com.vibium.internal;
 
 import com.vibium.errors.VibiumConnectionException;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -70,21 +66,9 @@ public final class BrowserInstaller {
 
     private static boolean isChromeInstalled(String binaryPath) {
         try {
-            ProcessBuilder pb = new ProcessBuilder(binaryPath, "paths");
+            ProcessBuilder pb = new ProcessBuilder(binaryPath, "is-installed");
             pb.redirectErrorStream(true);
             Process process = pb.start();
-
-            String chromePath = null;
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), "UTF-8"))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.startsWith("Chrome:")) {
-                        chromePath = line.substring("Chrome:".length()).trim();
-                        break;
-                    }
-                }
-            }
 
             boolean finished = process.waitFor(10, TimeUnit.SECONDS);
             if (!finished) {
@@ -92,7 +76,7 @@ public final class BrowserInstaller {
                 return false;
             }
 
-            return chromePath != null && Files.isRegularFile(Paths.get(chromePath));
+            return process.exitValue() == 0;
         } catch (Exception e) {
             return false;
         }

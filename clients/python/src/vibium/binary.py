@@ -116,22 +116,15 @@ def ensure_browser_installed(vibium_path: str) -> None:
 
     Runs 'vibium install' if Chrome is not found.
     """
-    # Check if Chrome is installed by running 'vibium paths'
+    # Check if Chrome and chromedriver are installed
     try:
         result = subprocess.run(
-            [vibium_path, "paths"],
+            [vibium_path, "is-installed"],
             capture_output=True,
-            text=True,
             timeout=10,
         )
-        output = result.stdout
-
-        # Check if Chrome path exists
-        for line in output.split("\n"):
-            if line.startswith("Chrome:"):
-                chrome_path = line.split(":", 1)[1].strip()
-                if os.path.isfile(chrome_path):
-                    return  # Chrome is installed
+        if result.returncode == 0:
+            return  # Already installed
 
     except (subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
