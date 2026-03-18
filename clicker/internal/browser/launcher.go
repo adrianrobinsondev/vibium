@@ -101,13 +101,13 @@ func Launch(opts LaunchOptions) (*LaunchResult, error) {
 
 	chromedriverPath, err := paths.GetChromedriverPath()
 	if err != nil {
-		return nil, fmt.Errorf("chromedriver not found: %w — run 'vibium install' to download Chrome for Testing", err)
+		return nil, fmt.Errorf("chromedriver not found")
 	}
 	log.Debug("found chromedriver", "path", chromedriverPath)
 
 	chromePath, err := paths.GetChromeExecutable()
 	if err != nil {
-		return nil, fmt.Errorf("Chrome not found: %w — run 'vibium install' to download Chrome for Testing", err)
+		return nil, fmt.Errorf("Chrome not found")
 	}
 	log.Debug("found chrome", "path", chromePath)
 
