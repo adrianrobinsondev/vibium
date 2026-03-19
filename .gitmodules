@@ -1,0 +1,3 @@
+[submodule "apps/record-player"]
+	path = apps/record-player
+	url = https://github.com/VibiumDev/record-player.git

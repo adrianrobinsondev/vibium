@@ -140,6 +140,19 @@ describe('Recording: basic start/stop', () => {
       assert.strictEqual(events[0].type, 'context-options');
       assert.strictEqual(events[0].browserName, 'chromium');
 
+      // context-options monotonicTime should be ~0 (relative)
+      assert.ok(events[0].monotonicTime < 100, `monotonicTime should be near 0, got: ${events[0].monotonicTime}`);
+      // wallTime should be absolute unix ms
+      assert.ok(events[0].wallTime > 1e12, `wallTime should be absolute unix ms, got: ${events[0].wallTime}`);
+      // contextId should be present
+      assert.ok(events[0].contextId, 'context-options should have contextId');
+
+      // action startTime should be small relative ms
+      const actions = events.filter(e => e.type === 'before' && e.startTime != null);
+      for (const a of actions) {
+        assert.ok(a.startTime < 60000, `startTime should be relative ms, got: ${a.startTime}`);
+      }
+
       await ctx.close();
     } finally {
       await bro.stop();
@@ -444,10 +457,10 @@ describe('Recording: network events', () => {
       // time should be a number
       assert.ok(typeof snapshot.time === 'number', 'time should be a number');
 
-      // _monotonicTime should be in seconds (not ms)
+      // _monotonicTime should be relative monotonic ms (small value, not epoch)
       assert.ok(typeof snapshot._monotonicTime === 'number', '_monotonicTime should be a number');
-      // If wallTime is > 1e12 ms (reasonable epoch ms), _monotonicTime should be ~1e9 (seconds)
-      assert.ok(snapshot._monotonicTime > 1e6 && snapshot._monotonicTime < 1e13, `_monotonicTime should be in seconds, got: ${snapshot._monotonicTime}`);
+      assert.ok(snapshot._monotonicTime >= 0 && snapshot._monotonicTime < 60000,
+        `_monotonicTime should be relative ms, got: ${snapshot._monotonicTime}`);
 
       // Verify request URL contains test server
       const urls = networkEvents.map(e => e.snapshot.request.url);
@@ -492,13 +505,13 @@ describe('Recording: zip structure', () => {
 
       const files = fs.readdirSync(extractedDir);
 
-      // Must have trace file matching pattern <n>-trace.trace (Playwright-compatible internal format)
-      const traceFiles = files.filter(f => /^\d+-trace\.trace$/.test(f));
-      assert.ok(traceFiles.length > 0, 'should have numbered trace file');
+      // Must have trace file (trace.trace for first chunk, N.trace for subsequent)
+      const traceFiles = files.filter(f => f.endsWith('.trace'));
+      assert.ok(traceFiles.length > 0, 'should have trace file');
 
-      // Must have network file matching pattern <n>-trace.network (Playwright-compatible internal format)
-      const networkFiles = files.filter(f => /^\d+-trace\.network$/.test(f));
-      assert.ok(networkFiles.length > 0, 'should have numbered network file');
+      // Must have network file (trace.network for first chunk, N.network for subsequent)
+      const networkFiles = files.filter(f => f.endsWith('.network'));
+      assert.ok(networkFiles.length > 0, 'should have network file');
 
       // Parse recording and verify event types
       const events = readRecordingEvents(extractedDir);

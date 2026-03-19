@@ -951,8 +951,8 @@ describe('MCP Server: Recording', { timeout: 120000 }, () => {
       const events = readRecordingEvents(extractedDir);
 
       // Look for group before event
-      const beforeEvents = events.filter(e => e.type === 'before' && e.title === 'test-group' && e.method === 'group');
-      assert.ok(beforeEvents.length > 0, 'Should have before event with title "test-group" and method "group"');
+      const beforeEvents = events.filter(e => e.type === 'before' && e.title === 'test-group' && e.method === 'tracingGroup');
+      assert.ok(beforeEvents.length > 0, 'Should have before event with title "test-group" and method "tracingGroup"');
 
       // Look for matching after event
       const callId = beforeEvents[0].callId;

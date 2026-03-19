@@ -303,12 +303,8 @@ func (r *Router) captureActionSnapshot(session *BrowserSession, recorder *Record
 	w, h := ImageDimensions(imgData)
 
 	// Store image in resources for Record Player
-	ext := "jpeg"
-	if opts.Format == "png" {
-		ext = "png"
-	}
-	hash := sha1Hex(imgData) + "." + ext
-	recorder.StoreResource(hash, imgData)
+	name := recorder.ScreenshotName(context, time.Now())
+	recorder.StoreResource(name, imgData)
 
 	// Inline data URI for Playwright compat (its service worker only intercepts HTTP(S))
 	mimeType := "image/jpeg"
@@ -338,7 +334,7 @@ func (r *Router) captureActionSnapshot(session *BrowserSession, recorder *Record
 	}
 
 	resourceOverrides := []interface{}{
-		map[string]interface{}{"url": imgSrc, "sha1": hash},
+		map[string]interface{}{"url": imgSrc, "sha1": name},
 	}
 
 	session.mu.Lock()

@@ -3,7 +3,6 @@ package api
 import (
 	"archive/zip"
 	"bytes"
-	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -96,12 +95,14 @@ type Recorder struct {
 	options         RecordingStartOptions
 	events          []recordEvent      // current chunk's recording events
 	network         []recordEvent      // current chunk's network events
-	resources       map[string][]byte // sha1 hex -> binary data (PNG/HTML)
+	resources       map[string][]byte // resource name -> binary data (JPEG/PNG)
 	groupStack      []groupEntry       // nested group entries (name + callId)
 	pendingRequests map[string]*pendingRequest // BiDi request ID -> pending request
 	chunkIndex      int
-	startTime       int64 // unix ms
-	actionCounter   int   // monotonic counter for action/bidi callIds
+	startTime       int64  // unix ms
+	monotonicBase   int64  // unix ms at recording start, all monotonic times are relative to this
+	contextId       string // unique context ID for this recording session
+	actionCounter   int    // monotonic counter for action/bidi callIds
 
 	// Screenshot goroutine control
 	screenshotStop chan struct{}
@@ -114,6 +115,11 @@ func NewRecorder() *Recorder {
 		resources:       make(map[string][]byte),
 		pendingRequests: make(map[string]*pendingRequest),
 	}
+}
+
+// monotonicNow returns the current time as relative monotonic ms since recording start.
+func (t *Recorder) monotonicNow() float64 {
+	return float64(time.Now().UnixMilli() - t.monotonicBase)
 }
 
 // IsRecording returns whether recording is currently active.
@@ -137,6 +143,8 @@ func (t *Recorder) Start(opts RecordingStartOptions) {
 	t.groupStack = nil
 	t.chunkIndex = 0
 	t.startTime = time.Now().UnixMilli()
+	t.monotonicBase = t.startTime
+	t.contextId = fmt.Sprintf("context@%x", t.startTime)
 
 	title := opts.Title
 	if title == "" {
@@ -149,8 +157,9 @@ func (t *Recorder) Start(opts RecordingStartOptions) {
 		"browserName":   "chromium",
 		"platform":      runtime.GOOS,
 		"wallTime":      float64(t.startTime),
-		"monotonicTime": float64(t.startTime),
+		"monotonicTime": float64(0),
 		"title":         title,
+		"contextId":     t.contextId,
 		"options":       map[string]interface{}{},
 		"sdkLanguage":   "javascript",
 		"version":       8,
@@ -179,20 +188,21 @@ func (t *Recorder) StartChunk(name, title string) {
 	t.events = nil
 	t.network = nil
 	t.chunkIndex++
+	t.monotonicBase = time.Now().UnixMilli()
 
 	chunkTitle := title
 	if chunkTitle == "" {
 		chunkTitle = name
 	}
 
-	now := float64(time.Now().UnixMilli())
 	t.events = append(t.events, recordEvent{
 		"type":          "context-options",
 		"browserName":   "chromium",
 		"platform":      runtime.GOOS,
-		"wallTime":      now,
-		"monotonicTime": now,
+		"wallTime":      float64(t.monotonicBase),
+		"monotonicTime": float64(0),
 		"title":         chunkTitle,
+		"contextId":     t.contextId,
 		"options":       map[string]interface{}{},
 		"sdkLanguage":   "javascript",
 		"version":       8,
@@ -232,16 +242,14 @@ func (t *Recorder) StartGroup(name string) {
 	t.actionCounter++
 	callId := fmt.Sprintf("call@%d", t.actionCounter)
 	t.groupStack = append(t.groupStack, groupEntry{name: name, callId: callId})
-	now := float64(time.Now().UnixMilli())
 	ev := recordEvent{
 		"type":      "before",
 		"callId":    callId,
 		"title":     name,
 		"class":     "Tracing",
-		"method":    "group",
+		"method":    "tracingGroup",
 		"params":    map[string]interface{}{"name": name},
-		"wallTime":  now,
-		"startTime": now,
+		"startTime": t.monotonicNow(),
 	}
 	if parentId != "" {
 		ev["parentId"] = parentId
@@ -264,7 +272,7 @@ func (t *Recorder) StopGroup() {
 	t.events = append(t.events, recordEvent{
 		"type":    "after",
 		"callId":  entry.callId,
-		"endTime": float64(time.Now().UnixMilli()),
+		"endTime": t.monotonicNow(),
 	})
 }
 
@@ -276,12 +284,20 @@ func (t *Recorder) Options() RecordingStartOptions {
 }
 
 // StoreResource stores binary data (e.g. screenshot JPEG/PNG) in the resources
-// map, keyed by its SHA1 hex hash. The data will be written to resources/<sha1>
+// map, keyed by name. The data will be written to resources/<name>
 // in the recording zip.
-func (t *Recorder) StoreResource(sha1 string, data []byte) {
+func (t *Recorder) StoreResource(name string, data []byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.resources[sha1] = data
+	t.resources[name] = data
+}
+
+// ScreenshotName generates a Playwright-compatible resource name for a screenshot.
+// Format: <pageId>-<wallTimeMs>.<ext> (e.g. "ABC123-1773879004791.jpeg")
+func (t *Recorder) ScreenshotName(pageID string, ts time.Time) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return fmt.Sprintf("%s-%d.%s", pageID, ts.UnixMilli(), t.imageExtension())
 }
 
 // apiNameFromMethod maps a vibium: method to (class, title) for recording display.
@@ -384,7 +400,6 @@ func (t *Recorder) RecordAction(callId, method string, params map[string]interfa
 	}
 
 	class, title := apiNameFromMethod(method)
-	now := float64(time.Now().UnixMilli())
 	ev := recordEvent{
 		"type":      "before",
 		"callId":    callId,
@@ -392,8 +407,7 @@ func (t *Recorder) RecordAction(callId, method string, params map[string]interfa
 		"class":     class,
 		"method":    method,
 		"params":    params,
-		"wallTime":  now,
-		"startTime": now,
+		"startTime": t.monotonicNow(),
 	}
 	// Add pageId so the viewer can match actions to page screenshots
 	if ctx, ok := params["context"].(string); ok && ctx != "" {
@@ -444,7 +458,7 @@ func (t *Recorder) RecordActionEnd(callId, afterSnapshot string, endTime time.Ti
 	ev := recordEvent{
 		"type":    "after",
 		"callId":  callId,
-		"endTime": float64(endTime.UnixMilli()),
+		"endTime": float64(endTime.UnixMilli() - t.monotonicBase),
 	}
 	if afterSnapshot != "" {
 		ev["afterSnapshot"] = afterSnapshot
@@ -464,7 +478,6 @@ func (t *Recorder) RecordBidiCommand(method string, params map[string]interface{
 
 	t.actionCounter++
 	callId := fmt.Sprintf("call@%d", t.actionCounter)
-	now := float64(time.Now().UnixMilli())
 	ev := recordEvent{
 		"type":      "before",
 		"callId":    callId,
@@ -472,8 +485,7 @@ func (t *Recorder) RecordBidiCommand(method string, params map[string]interface{
 		"class":     "BiDi",
 		"method":    method,
 		"params":    params,
-		"wallTime":  now,
-		"startTime": now,
+		"startTime": t.monotonicNow(),
 	}
 	// Link to parent group for nesting in Record Player
 	if gid := t.currentGroupIdLocked(); gid != "" {
@@ -496,7 +508,7 @@ func (t *Recorder) RecordBidiCommandEnd(callId string) {
 	t.events = append(t.events, recordEvent{
 		"type":    "after",
 		"callId":  callId,
-		"endTime": float64(time.Now().UnixMilli()),
+		"endTime": t.monotonicNow(),
 	})
 }
 
@@ -514,15 +526,15 @@ func (t *Recorder) AddScreenshot(pngData []byte, pageID string, width, height in
 		ts = time.Now()
 	}
 
-	hash := sha1Hex(pngData) + "." + t.imageExtension()
-	t.resources[hash] = pngData
+	name := fmt.Sprintf("%s-%d.%s", pageID, ts.UnixMilli(), t.imageExtension())
+	t.resources[name] = pngData
 	t.events = append(t.events, recordEvent{
 		"type":      "screencast-frame",
 		"pageId":    pageID,
-		"sha1":      hash,
+		"sha1":      name,
 		"width":     width,
 		"height":    height,
-		"timestamp": float64(ts.UnixMilli()),
+		"timestamp": float64(ts.UnixMilli() - t.monotonicBase),
 	})
 }
 
@@ -544,7 +556,7 @@ func (t *Recorder) AddFrameSnapshot(callId, snapshotType, pageId, frameURL, doct
 	}
 
 	snapshotName := snapshotType + "@" + callId
-	now := float64(time.Now().UnixMilli())
+	now := t.monotonicNow()
 
 	t.events = append(t.events, recordEvent{
 		"type": "frame-snapshot",
@@ -591,8 +603,6 @@ func (t *Recorder) RecordBidiEvent(msg string) {
 		return
 	}
 
-	now := float64(time.Now().UnixMilli())
-
 	switch bidiEvent.Method {
 	case "network.beforeRequestSent":
 		req := parsePendingRequest(bidiEvent.Params)
@@ -610,7 +620,7 @@ func (t *Recorder) RecordBidiEvent(msg string) {
 			delete(t.pendingRequests, requestID)
 		}
 		if pending != nil {
-			entry := bidiToHAREntry(pending, bidiEvent.Params, false)
+			entry := bidiToHAREntry(pending, bidiEvent.Params, false, t.monotonicBase)
 			t.network = append(t.network, entry)
 		}
 
@@ -623,7 +633,7 @@ func (t *Recorder) RecordBidiEvent(msg string) {
 			delete(t.pendingRequests, requestID)
 		}
 		if pending != nil {
-			entry := bidiToHAREntry(pending, bidiEvent.Params, true)
+			entry := bidiToHAREntry(pending, bidiEvent.Params, true, t.monotonicBase)
 			t.network = append(t.network, entry)
 		}
 
@@ -632,7 +642,7 @@ func (t *Recorder) RecordBidiEvent(msg string) {
 			"type":   "event",
 			"method": bidiEvent.Method,
 			"params": bidiEvent.Params,
-			"time":   now,
+			"time":   t.monotonicNow(),
 			"class":  "BrowserContext",
 		})
 	}
@@ -694,7 +704,7 @@ func parsePendingRequestFromResponse(params map[string]interface{}) *pendingRequ
 
 // bidiToHAREntry builds a Playwright resource-snapshot event from a
 // correlated BiDi request and response (or fetchError).
-func bidiToHAREntry(pending *pendingRequest, responseParams map[string]interface{}, isFetchError bool) recordEvent {
+func bidiToHAREntry(pending *pendingRequest, responseParams map[string]interface{}, isFetchError bool, monotonicBase int64) recordEvent {
 	endTimestamp := toFloat64(responseParams["timestamp"])
 	timeDelta := 0.0
 	if endTimestamp > 0 && pending.timestamp > 0 {
@@ -741,7 +751,7 @@ func bidiToHAREntry(pending *pendingRequest, responseParams map[string]interface
 			"wait":    timeDelta,
 			"receive": float64(-1),
 		},
-		"_monotonicTime": startTime / 1000.0,
+		"_monotonicTime": startTime - float64(monotonicBase),
 	}
 	if context != "" {
 		entry["_frameref"] = context
@@ -960,8 +970,13 @@ func (t *Recorder) buildZipLocked() ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
-	// Write trace events: <chunkIndex>-trace.trace
-	traceName := fmt.Sprintf("%d-trace.trace", t.chunkIndex)
+	// Write trace events
+	var traceName string
+	if t.chunkIndex == 0 {
+		traceName = "trace.trace"
+	} else {
+		traceName = fmt.Sprintf("%d.trace", t.chunkIndex)
+	}
 	tw, err := zw.Create(traceName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace entry: %w", err)
@@ -975,8 +990,13 @@ func (t *Recorder) buildZipLocked() ([]byte, error) {
 		tw.Write([]byte("\n"))
 	}
 
-	// Write network events: <chunkIndex>-trace.network
-	netName := fmt.Sprintf("%d-trace.network", t.chunkIndex)
+	// Write network events
+	var netName string
+	if t.chunkIndex == 0 {
+		netName = "trace.network"
+	} else {
+		netName = fmt.Sprintf("%d.network", t.chunkIndex)
+	}
 	nw, err := zw.Create(netName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create network entry: %w", err)
@@ -990,9 +1010,9 @@ func (t *Recorder) buildZipLocked() ([]byte, error) {
 		nw.Write([]byte("\n"))
 	}
 
-	// Write resources: resources/<sha1>.<ext> (e.g. resources/abc123.jpeg)
-	for hash, data := range t.resources {
-		rw, err := zw.Create("resources/" + hash)
+	// Write resources: resources/<name> (e.g. resources/ABC123-1773879004791.jpeg)
+	for name, data := range t.resources {
+		rw, err := zw.Create("resources/" + name)
 		if err != nil {
 			continue
 		}
@@ -1012,12 +1032,6 @@ func (t *Recorder) imageExtension() string {
 		return "png"
 	}
 	return "jpeg"
-}
-
-// sha1Hex returns the lowercase hex-encoded SHA1 hash of data.
-func sha1Hex(data []byte) string {
-	h := sha1.Sum(data)
-	return fmt.Sprintf("%x", h)
 }
 
 // decodeBase64 decodes a standard base64 string.
