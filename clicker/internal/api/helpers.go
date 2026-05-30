@@ -48,18 +48,34 @@ func checkBidiError(resp json.RawMessage) error {
 }
 
 // parseScriptResult parses a BiDi script.callFunction response and returns the string value.
-// Expected structure: { "result": { "result": { "type": "string", "value": "..." } } }
+// Success structure:   { "result": { "type": "success",   "result": { "type": "string", "value": "..." } } }
+// Exception structure: { "result": { "type": "exception", "exceptionDetails": { "text": "..." } } }
 func parseScriptResult(resp json.RawMessage) (string, error) {
 	var result struct {
 		Result struct {
+			Type   string `json:"type"`
 			Result struct {
 				Type  string `json:"type"`
 				Value string `json:"value,omitempty"`
 			} `json:"result"`
+			ExceptionDetails struct {
+				Text string `json:"text"`
+			} `json:"exceptionDetails"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return "", fmt.Errorf("failed to parse script result: %w", err)
+	}
+
+	// A thrown exception has no result value — surface it instead of silently
+	// returning an empty string, which previously masked errors such as the
+	// "Illegal invocation" crash when filling a <textarea> (issues #117, #111).
+	if result.Result.Type == "exception" {
+		text := result.Result.ExceptionDetails.Text
+		if text == "" {
+			text = "script threw an exception"
+		}
+		return "", fmt.Errorf("%s", text)
 	}
 
 	if result.Result.Result.Type == "null" || result.Result.Result.Type == "undefined" {
