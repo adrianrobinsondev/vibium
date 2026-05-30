@@ -68,8 +68,12 @@ before(async () => {
 
 after(async () => {
   if (bro) await bro.stop();
-  if (wsServer) wsServer.close();
-  if (httpServer) httpServer.close();
+  // Await closes so the event loop is actually done when after() returns.
+  // Without this, dangling sockets keep node:test waiting and trip the
+  // "Promise resolution is still pending but the event loop has already
+  // resolved" file-level warning under heavy load.
+  if (wsServer) await new Promise((resolve) => wsServer.close(resolve));
+  if (httpServer) await new Promise((resolve) => httpServer.close(resolve));
 });
 
 // Each test gets a fresh page so onWebSocket listeners don't leak between tests.
@@ -222,13 +226,13 @@ describe('WebSocket Monitoring: page.onWebSocket', () => {
   });
 
   test('monitoring survives page navigation (preload script persists)', async () => {
-    // This test exercises preload-script persistence on the *default* context's
-    // default page. Sharing the browser with earlier tests leaves the preload
-    // script in a state where re-navigations don't re-fire it, so this test
-    // gets its own browser to match the original isolated setup.
-    const bro2 = await browser.start({ headless: true });
+    // Use a fresh user context (not a fresh browser) so this test pays the
+    // ~3ms newContext() cost instead of ~16s for browser.start(). The
+    // preload script is bound to the page's browsing context, so a fresh
+    // user context gives us a clean slot to install it.
+    const ctx = await bro.newContext();
     try {
-      const vibe = await bro2.page();
+      const vibe = await ctx.newPage();
       await vibe.go(baseURL);
 
       let wsCount = 0;
@@ -248,18 +252,15 @@ describe('WebSocket Monitoring: page.onWebSocket', () => {
       await withTimeout(firstSeen, 5000, 'first-page WS');
       assert.strictEqual(wsCount, 1, 'Should have captured 1 WS on first page');
 
-      // Navigate to a new page
+      // Re-navigate the same page — preload script should re-fire on load.
       await vibe.go(baseURL);
-      // No INSTALL_BARRIER here: onWebSocket was already installed before the
-      // first navigation, and the preload script is what we're testing.
 
-      // Create WS on second page — preload script should still be active
       const secondSeen = nextWs();
       await vibe.evaluate(`window.createWS('${wsURL}')`);
       await withTimeout(secondSeen, 5000, 'second-page WS after navigation');
       assert.strictEqual(wsCount, 2, 'Should have captured 2 WS total after navigation');
     } finally {
-      await bro2.stop();
+      await ctx.close();
     }
   });
 

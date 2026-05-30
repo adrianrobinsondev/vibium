@@ -75,7 +75,9 @@ async function waitUntil(fn, description, { timeout = 15000, interval = 500 } = 
 }
 
 describe('JS Sync Process Cleanup', () => {
-  test('sync API cleans up Chrome on stop()', async () => {
+  // 60s: one browser.start() on macOS is ~16s; remainder is for the
+  // post-stop waitUntil() polling Chrome PIDs to disappear.
+  test('sync API cleans up Chrome on stop()', { timeout: 60000 }, async () => {
     const pidsBefore = getClickerChromePids();
 
     const bro = browserSync.start({ headless: true });

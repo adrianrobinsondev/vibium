@@ -48,66 +48,84 @@ export class VibiumProcess {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
+    // If anything below throws — wait-for-ready timeout, the caller's await
+    // being interrupted by a test-runner timeout, an unhandled rejection —
+    // we must SIGKILL the spawned child. Otherwise its pipes stay open,
+    // keep Node's event loop alive, and the test process hangs with
+    // "Promise resolution is still pending but the event loop has already
+    // resolved". The `finally` runs before re-throwing.
+    const killSpawnedChild = () => {
+      try {
+        if (proc.exitCode === null) proc.kill('SIGKILL');
+      } catch {}
+    };
+
     // Read lines from stdout until we get the vibium:lifecycle.ready signal.
     // Events (e.g. browsingContext.contextCreated) may arrive first.
     const preReadyLines: string[] = [];
-    await new Promise<void>((resolve, reject) => {
-      let buffer = '';
-      let resolved = false;
+    let readyOK = false;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let buffer = '';
+        let resolved = false;
 
-      const timeout = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          reject(new TimeoutError('vibium', 60000, 'waiting for vibium ready signal'));
-        }
-      }, 60000);
-
-      const handleData = (data: Buffer) => {
-        buffer += data.toString();
-        let newlineIdx: number;
-        while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-          const line = buffer.slice(0, newlineIdx).trim();
-          buffer = buffer.slice(newlineIdx + 1);
-          if (!line) continue;
-
-          try {
-            const msg = JSON.parse(line);
-            if (msg.method === 'vibium:lifecycle.ready') {
-              if (!resolved) {
-                resolved = true;
-                clearTimeout(timeout);
-                // Stop listening for data — the BiDiClient will take over
-                proc.stdout?.removeListener('data', handleData);
-                resolve();
-              }
-              return;
-            }
-          } catch {
-            // Not JSON, ignore
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            reject(new TimeoutError('vibium', 60000, 'waiting for vibium ready signal'));
           }
-          // Buffer pre-ready lines for replay
-          preReadyLines.push(line);
-        }
-      };
+        }, 60000);
 
-      proc.stdout?.on('data', handleData);
+        const handleData = (data: Buffer) => {
+          buffer += data.toString();
+          let newlineIdx: number;
+          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIdx).trim();
+            buffer = buffer.slice(newlineIdx + 1);
+            if (!line) continue;
 
-      proc.on('error', (err) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          reject(err);
-        }
+            try {
+              const msg = JSON.parse(line);
+              if (msg.method === 'vibium:lifecycle.ready') {
+                if (!resolved) {
+                  resolved = true;
+                  clearTimeout(timeout);
+                  // Stop listening for data — the BiDiClient will take over
+                  proc.stdout?.removeListener('data', handleData);
+                  resolve();
+                }
+                return;
+              }
+            } catch {
+              // Not JSON, ignore
+            }
+            // Buffer pre-ready lines for replay
+            preReadyLines.push(line);
+          }
+        };
+
+        proc.stdout?.on('data', handleData);
+
+        proc.on('error', (err) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            reject(err);
+          }
+        });
+
+        proc.on('exit', (code) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            reject(new BrowserCrashedError(code ?? 1, buffer));
+          }
+        });
       });
-
-      proc.on('exit', (code) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          reject(new BrowserCrashedError(code ?? 1, buffer));
-        }
-      });
-    });
+      readyOK = true;
+    } finally {
+      if (!readyOK) killSpawnedChild();
+    }
 
     const vp = new VibiumProcess(proc, preReadyLines);
 

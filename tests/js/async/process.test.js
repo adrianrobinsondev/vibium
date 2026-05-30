@@ -66,7 +66,9 @@ async function waitUntil(fn, description, { timeout = 15000, interval = 500 } = 
 }
 
 describe('JS Async Process Cleanup', () => {
-  test('async API cleans up Chrome on stop()', async () => {
+  // 60s: one browser.start() on macOS is ~16s; remainder is for the
+  // post-stop waitUntil() polling Chrome PIDs to disappear.
+  test('async API cleans up Chrome on stop()', { timeout: 60000 }, async () => {
     const pidsBefore = getClickerChromePids();
 
     const bro = await browser.start({ headless: true });
@@ -89,7 +91,8 @@ describe('JS Async Process Cleanup', () => {
     );
   });
 
-  test('multiple sequential sessions clean up properly', async () => {
+  // 120s: 3 × browser.start() at ~16s each on macOS plus post-stop polling.
+  test('multiple sequential sessions clean up properly', { timeout: 120000 }, async () => {
     const pidsBefore = getClickerChromePids();
 
     // Run 3 sessions sequentially

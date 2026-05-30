@@ -187,12 +187,12 @@ test-cli: build-go
 
 # Run JS library tests
 # Each test file owns its own browser (top-level before/after), so files are
-# independent and safe to run in parallel. JS_PARALLEL controls the fan-out
-# (override: make test-js JS_PARALLEL=4). Measured ~3x speedup at 4 vs 1,
-# but parallel runs have produced intermittent hangs on shared resources, so
-# the default stays at 1 until we root-cause. Process tests stay sequential
-# because they assert on Chrome process lifecycle.
-JS_PARALLEL ?= 1
+# independent and safe to run in parallel. JS_PARALLEL controls the fan-out:
+# default 4 gives ~3x speedup vs sequential. (Previously sequential because
+# we suspected parallel-induced flakes; root cause was a cross-process Chrome
+# temp-dir cleanup race in clicker/internal/browser/launcher.go, now fixed.)
+# Process tests stay sequential because they assert on Chrome process lifecycle.
+JS_PARALLEL ?= 4
 test-js: build-go
 	@echo "--- JS Async Tests (parallel x$(JS_PARALLEL)) ---"
 	$(TIMEOUT_CMD) node --test $(TEST_FLAGS) --test-concurrency=$(JS_PARALLEL) \
