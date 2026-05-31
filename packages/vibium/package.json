@@ -44,6 +44,7 @@
     "vibium": "bin/cli.js"
   },
   "scripts": {
+    "prepack": "node scripts/prepack.mjs",
     "postinstall": "node postinstall.js"
   },
   "files": [
