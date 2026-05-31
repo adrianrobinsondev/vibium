@@ -501,12 +501,23 @@ func (r *Router) handlePageWaitForFunction(session *BrowserSession, cmd bidiComm
 		timeout = time.Duration(timeoutMs) * time.Millisecond
 	}
 
+	// Callers pass either a full function ("() => cond", "function(){...}") or a
+	// bare boolean expression ("document.readyState === 'complete'"). A bare
+	// expression is not a valid functionDeclaration, so BiDi threw every poll and
+	// the call always timed out (issues #123, #131, #145). Wrap uniformly: evaluate
+	// the operand, and invoke it if it turned out to be a function.
+	wrapped := fmt.Sprintf(
+		"() => { const __vibiumPred = (%s); return (typeof __vibiumPred === 'function') ? __vibiumPred() : __vibiumPred; }",
+		strings.TrimRight(strings.TrimSpace(fn), ";"),
+	)
+
 	deadline := time.Now().Add(timeout)
 	interval := 100 * time.Millisecond
+	lastErr := ""
 
 	for {
 		resp, err := r.sendInternalCommand(session, "script.callFunction", map[string]interface{}{
-			"functionDeclaration": fn,
+			"functionDeclaration": wrapped,
 			"target":              map[string]interface{}{"context": context},
 			"arguments":           []map[string]interface{}{},
 			"awaitPromise":        true,
@@ -515,41 +526,55 @@ func (r *Router) handlePageWaitForFunction(session *BrowserSession, cmd bidiComm
 		if err == nil {
 			var result struct {
 				Result struct {
+					Type   string `json:"type"`
 					Result struct {
 						Type  string      `json:"type"`
 						Value interface{} `json:"value"`
 					} `json:"result"`
+					ExceptionDetails struct {
+						Text string `json:"text"`
+					} `json:"exceptionDetails"`
 				} `json:"result"`
 			}
 			if err := json.Unmarshal(resp, &result); err == nil {
-				// Truthy check: non-null, non-undefined, non-false, non-zero, non-empty-string
-				res := result.Result.Result
-				truthy := false
-				switch res.Type {
-				case "boolean":
-					truthy = res.Value == true
-				case "number":
-					if v, ok := res.Value.(float64); ok {
-						truthy = v != 0
+				if result.Result.Type == "exception" {
+					// Keep polling — the expression may reference state that does
+					// not exist yet — but remember why for the timeout message.
+					lastErr = result.Result.ExceptionDetails.Text
+				} else {
+					// Truthy check: non-null, non-undefined, non-false, non-zero, non-empty-string
+					res := result.Result.Result
+					truthy := false
+					switch res.Type {
+					case "boolean":
+						truthy = res.Value == true
+					case "number":
+						if v, ok := res.Value.(float64); ok {
+							truthy = v != 0
+						}
+					case "string":
+						if v, ok := res.Value.(string); ok {
+							truthy = v != ""
+						}
+					case "null", "undefined":
+						truthy = false
+					default:
+						truthy = res.Value != nil
 					}
-				case "string":
-					if v, ok := res.Value.(string); ok {
-						truthy = v != ""
+					if truthy {
+						r.sendSuccess(session, cmd.ID, map[string]interface{}{"value": res.Value})
+						return
 					}
-				case "null", "undefined":
-					truthy = false
-				default:
-					truthy = res.Value != nil
-				}
-				if truthy {
-					r.sendSuccess(session, cmd.ID, map[string]interface{}{"value": res.Value})
-					return
 				}
 			}
 		}
 
 		if time.Now().After(deadline) {
-			r.sendError(session, cmd.ID, fmt.Errorf("timeout waiting for function to return truthy"))
+			if lastErr != "" {
+				r.sendError(session, cmd.ID, fmt.Errorf("timeout waiting for function to return truthy (last error: %s)", lastErr))
+			} else {
+				r.sendError(session, cmd.ID, fmt.Errorf("timeout waiting for function to return truthy"))
+			}
 			return
 		}
 
