@@ -895,7 +895,10 @@ func IsEnabled(s Session, context string, ep ElementParams) (bool, error) {
 
 // GetCount counts elements matching a CSS selector.
 func GetCount(s Session, context, selector string) (int, error) {
-	expr := fmt.Sprintf(`() => document.querySelectorAll(%q).length`, selector)
+	// Return the count as a string: parseScriptResult unmarshals the BiDi result
+	// value into a Go string field, so a bare numeric result fails with "cannot
+	// unmarshal number ... into ... string" (issue #149).
+	expr := fmt.Sprintf(`() => String(document.querySelectorAll(%q).length)`, selector)
 	val, err := EvalSimpleScript(s, context, expr)
 	if err != nil {
 		return 0, err
