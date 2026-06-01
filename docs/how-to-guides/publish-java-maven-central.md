@@ -189,10 +189,6 @@ curl -s -X POST \
   -H "Authorization: Bearer $(echo -n "$SONATYPE_USER:$SONATYPE_PASS" | base64)"
 ```
 
-> **Use `-X POST`** — the status endpoint is a POST (like upload and publish).
-> A `GET` returns a generic `{"httpStatus":500,...,"errorCode":10500}`. An empty
-> `$DEPLOYMENT_ID` produces the same 500, so confirm it's set (`echo "$DEPLOYMENT_ID"`).
-
 Once validation passes, publish it:
 
 ```bash
